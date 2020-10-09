@@ -6,12 +6,6 @@ const fs = require('fs'),
 var reportsPath = "./reports"
 var dates = {}, date, data = []
 
-
-console.log('EXIST_ACCESS_TOKEN', EXIST_ACCESS_TOKEN)
-return
-
-
-
 fs.readdir(reportsPath, function (err, files) {
   if (err) {
     console.error("Could not list the directory.", err);
