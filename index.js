@@ -1,79 +1,118 @@
 require('dotenv').config()
-const fs = require('fs'),
+const sqlite3 = require('sqlite3').verbose(),
       axios = require('axios'),
-      moment = require('moment'),
-      EXIST_ACCESS_TOKEN = process.env.EXIST_ACCESS_TOKEN
-var reportsPath = "./reports"
-var dates = {}, date, data = []
+      moment = require('moment')
+const DATABASE_URL = process.env.QBSERVE_DATABASE_URL,
+      EXIST_ACCESS_TOKEN = process.env.EXIST_ACCESS_TOKEN,
+      START_DATE = moment(process.env.EXIST_START_DATE).startOf('day').format('X')
 
-fs.readdir(reportsPath, function (err, files) {
-  if (err) {
-    console.error("Could not list the directory.", err);
-    process.exit(1);
+axios.defaults.headers.common['Authorization'] = `Bearer ${EXIST_ACCESS_TOKEN}`;
+
+var knex = require('knex')({
+  client: 'sqlite3',
+  connection: {
+    filename: DATABASE_URL
   }
-
-  files.forEach(function (fileName, index) {
-    let report = require(`./${reportsPath}/${fileName}`)
-    date = moment(fileName, 'YYYY-MM-DD').format('YYYY-MM-DD')
-
-    // Default the data
-    dates[date] = data[date] || {
-      distracting_min: 0,
-      neutral_min: 0,
-      productive_min: 0
-    }
-
-    // Increase the counts
-    dates[date].productive_min += parseInt(report.totals.productive_duration / 60)
-    dates[date].distracting_min += parseInt(report.totals.distracting_duration / 60)
-    dates[date].neutral_min += parseInt(report.totals.neutral_duration / 60)
-  });
-
-  for(var day in dates) {
-    data.push({
-      date: day,
-      name: "productive_min",
-      value: dates[day].productive_min
-    })
-    data.push({
-      date: day,
-      name: "distracting_min",
-      value: dates[day].distracting_min
-    })
-    data.push({
-      date: day,
-      name: "neutral_min",
-      value: dates[day].neutral_min
-    })
-  }
-
-  // Acquire attributes
-  var attributes = [
-    { name: "distracting_min", active: true },
-    { name: "neutral_min", active: true },
-    { name: "productive_min", active: true }
-  ]
-
-  axios.defaults.headers.common['Authorization'] = `Bearer ${EXIST_ACCESS_TOKEN}`;
-  axios.post('https://exist.io/api/1/attributes/acquire/', attributes).then((res) => {
-    console.log('Acquired')
-
-    var currentData = [], currentRequest;
-    for(var i=0; i<data.length; i+=35) {
-      currentData = data.slice(i, 35)
-
-      console.log('Updating', i, i+35)
-      currentRequest = data.slice(i, i+35)
-      console.log('currentRequest', currentRequest)
-      axios.post('https://exist.io/api/1/attributes/update/', currentRequest).then((response) => {
-        console.log('Updated')
-      }).catch(function (error) {
-        // handle error
-        console.log('updated error', error);
-      })
-    }
-  }).catch(function (error) {
-    // handle error
-    console.log('acquire error', error);
-  })
 });
+
+
+let HISTORY_TABLES = `SELECT table_name FROM HistoryTablesIndex ORDER BY start_date`
+
+let categories = {
+  '-1': 'distracting_min',
+  '0': 'neutral_min',
+  '1': 'productive_min',
+}
+
+function parseTableNames(historyRow) {
+  console.log('parseTableNames')
+  return historyRow.map((row) => row.table_name)
+}
+
+function lookupActitiesByHistoryTable(historyTables) {
+  console.log('lookupActitiesByHistoryTable')
+  return Promise.all(historyTables.map(tableName => {
+    let sql = `
+      SELECT
+        start_time,
+        date(start_time,'unixepoch') as date,
+        sum(duration) as duration,
+        c.productivity as productivity
+      FROM ${tableName} log
+      INNER JOIN Activities a ON log.activity_id = a._id
+      INNER JOIN Categories c ON a.category_id = c._id
+      GROUP BY date(start_time,'unixepoch'), c.productivity
+      ORDER BY date(start_time,'unixepoch')
+    `
+    return knex.raw(sql)
+  }))
+}
+
+function flattenActivities(activities) {
+  console.log('flattenActivities')
+  return activities.flat()
+}
+
+function filterActivitiesByDate(activities) {
+  console.log('filterActivitiesByDate')
+
+  return activities.filter((activity) => {
+    return activity.start_time >= START_DATE
+  })
+}
+
+function convertActivitiesToExist(activities) {
+  console.log('convertActivitiesToExist')
+  return activities.map((activity) => {
+    return {
+      date: activity.date,
+      name: categories[activity.productivity],
+      value: parseInt(activity.duration / 60)
+    }
+  })
+}
+
+function acquireExistFields(activities) {
+  console.log('acquireExistFields')
+
+  return new Promise((resolve, reject) => {
+    var attributes = [
+      { name: "distracting_min", active: true },
+      { name: "neutral_min", active: true },
+      { name: "productive_min", active: true }
+    ]
+    axios.post('https://exist.io/api/1/attributes/acquire/', attributes)
+         .then(() => resolve(activities))
+         .catch((error) => reject(error))
+  })
+}
+
+function sendActivitiesToExist(activities) {
+  console.log('sendActivitiesToExist')
+  var currentRequest, promises = [], promise
+  for(var i=0; i<activities.length; i+=35) {
+    currentRequest = activities.slice(i, i+35)
+    promise = new Promise((resolve, reject) => {
+      axios.post('https://exist.io/api/1/attributes/update/', currentRequest)
+           .then(() => resolve())
+           .catch((error) => reject(error))
+    })
+
+    promises.push(promise)
+  }
+
+  return Promise.all(promises)
+}
+
+var data = [], sql
+knex.raw(HISTORY_TABLES)
+  .then(parseTableNames)
+  // .then((tables) => { console.log('tables', tables); return tables; })
+  .then(lookupActitiesByHistoryTable)
+  .then(flattenActivities)
+  .then(filterActivitiesByDate)
+  // .then((activities) => console.log('activities', activities))
+  .then(convertActivitiesToExist)
+  .then(acquireExistFields)
+  .then(sendActivitiesToExist)
+  .finally(() => knex.destroy())
