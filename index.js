@@ -35,14 +35,14 @@ function lookupActitiesByHistoryTable(historyTables) {
     let sql = `
       SELECT
         start_time,
-        date(start_time,'unixepoch') as date,
+        date(start_time,'unixepoch', 'localtime') as date,
         sum(duration) as duration,
         c.productivity as productivity
       FROM ${tableName} log
       INNER JOIN Activities a ON log.activity_id = a._id
       INNER JOIN Categories c ON a.category_id = c._id
-      GROUP BY date(start_time,'unixepoch'), c.productivity
-      ORDER BY date(start_time,'unixepoch')
+      GROUP BY date(start_time,'unixepoch', 'localtime'), c.productivity
+      ORDER BY date(start_time,'unixepoch', 'localtime')
     `
     return knex.raw(sql)
   }))
@@ -88,7 +88,7 @@ function acquireExistFields(activities) {
 }
 
 function sendActivitiesToExist(activities) {
-  console.log('sendActivitiesToExist')
+  console.log('sendActivitiesToExist', activities)
   var currentRequest, promises = [], promise
   for(var i=0; i<activities.length; i+=35) {
     currentRequest = activities.slice(i, i+35)
@@ -111,7 +111,6 @@ knex.raw(HISTORY_TABLES)
   .then(lookupActitiesByHistoryTable)
   .then(flattenActivities)
   .then(filterActivitiesByDate)
-  // .then((activities) => console.log('activities', activities))
   .then(convertActivitiesToExist)
   .then(acquireExistFields)
   .then(sendActivitiesToExist)
