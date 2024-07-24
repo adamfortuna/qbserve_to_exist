@@ -99,7 +99,7 @@ function acquireExistFields(activities) {
       { name: "neutral_min", active: true },
       { name: "productive_min", active: true }
     ]
-    axios.post('https://exist.io/api/1/attributes/acquire/', attributes)
+    axios.post('https://exist.io/api/2/attributes/acquire/', attributes)
          .then(() => resolve(activities))
          .catch((error) => reject(error))
   })
@@ -111,7 +111,7 @@ function sendActivitiesToExist(activities) {
   for(var i=0; i<activities.length; i+=35) {
     currentRequest = activities.slice(i, i+35)
     promise = new Promise((resolve, reject) => {
-      axios.post('https://exist.io/api/1/attributes/update/', currentRequest)
+      axios.post('https://exist.io/api/2/attributes/update/', currentRequest)
            .then(() => resolve())
            .catch((error) => reject(error))
     })
